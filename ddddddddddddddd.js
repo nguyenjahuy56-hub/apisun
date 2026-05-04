@@ -135,6 +135,8 @@ function connectWebSocket() {
                 dashboardData.Phien = currentSessionId;
                 dashboardData.Ket_qua = result;
                 dashboardData.Tong = total;
+                // 👇 DÒNG NÀY ĐÃ ĐƯỢC THÊM ĐỂ HIỂN THỊ ĐÚNG MẢNG XÚC XẮC 👇
+                dashboardData.Xuc_xac = [d1, d2, d3];
                 
                 console.log(`[🎲] Phiên ${apiResponseData.Phien}: ${d1}-${d2}-${d3} = ${total} (${result})`);
                 
