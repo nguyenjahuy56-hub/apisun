@@ -1,92 +1,46 @@
 const WebSocket = require('ws');
 const express = require('express');
 const cors = require('cors');
-const os = require('os');
-const network = require('network');
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // BẮT BUỘC ĐỂ NHẬN DATA TỪ PYTHON
+app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
+// Data cho Python cào
 let apiResponseData = {
-    "Phien": null,
-    "Xuc_xac_1": null,
-    "Xuc_xac_2": null,
-    "Xuc_xac_3": null,
-    "Tong": null,
-    "Ket_qua": "",
-    "id": "dd",
-    "server_time": new Date().toISOString()
+    "Phien": null, "Xuc_xac_1": null, "Xuc_xac_2": null, "Xuc_xac_3": null,
+    "Tong": null, "Ket_qua": "", "id": "dd", "server_time": new Date().toISOString()
 };
 
-// Dữ liệu lưu trữ tổng hợp cho Dashboard
+// Data cho Giao diện Dashboard V17
 let dashboardData = {
-    Phien: "Đang chờ...",
-    Ket_qua: "--",
-    Xuc_xac: [0,0,0],
-    Tong: 0,
+    Phien: "Đang chờ...", Ket_qua: "--", Xuc_xac: [0,0,0], Tong: 0,
     ai_prediction: {
-        result: "WAIT",
-        confidence: 0,
-        detail: "Đang phân tích...",
-        win_rate: 0,
-        total_played: 0,
-        history: [] // Lưu 20 phiên gần nhất
+        result: "WAIT", confidence: 0, detail: "Đang phân tích...",
+        win_rate: 0, total_played: 0, history: [] 
     }
 };
 
 let currentSessionId = null;
-const patternHistory = [];
 
-const WEBSOCKET_URL = "wss://websocket.azhkthg1.net/websocket?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOnRydWUsInBsYXlFdmVudExvYmJ5IjpmYWxzZSwiY3VzdG9tZXJJZCI6MjM5OTUzMjE1LCJhZmZJZCI6ImRlZmF1bHQiLCJiYW5uZWQiOmZhbHNlLCJicmFuZCI6InN1bi53aW4iLCJlbWFpbCI6IiIsInRpbWVzdGFtcCI6MTc3ODA0MzQyMjAxNiwibG9ja0dhbWVzIjpbXSwiYW1vdW50IjowLCJsb2NrQ2hhdCI6ZmFsc2UsInBob25lVmVyaWZpZWQiOnRydWUsImlwQWRkcmVzcyI6IjExMy4xNzUuMTAwLjU3IiwibXV0ZSI6ZmFsc2UsImF2YXRhciI6Imh0dHBzOi8vaW1hZ2VzLnN3aW5zaG9wLm5ldC9pbWFnZXMvYXZhdGFyL2F2YXRhcl8xMC5wbmciLCJwbGF0Zm9ybUlkIjoyLCJ1c2VySWQiOiIwMDM3NDA2OC04YmZiLTQ5NTYtOWIxMi0yODkzYzMxMDcxNjAiLCJlbWFpbFZlcmlmaWVkIjpudWxsLCJyZWdUaW1lIjoxNzQ1NTkyNjU1ODA3LCJwaG9uZSI6Ijg0MzI5Njg5OTcxIiwiZGVwb3NpdCI6dHJ1ZSwidXNlcm5hbWUiOiJTQ19zb25ndmVkZW0xMCJ9.4jl_XtPCRLFuSOrBlfAtaSz3kg27oIqZFqcHwPv34G0";
+const WEBSOCKET_URL = "wss://websocket.azhkthg1.net/websocket?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjIzOTk1MzIxNSwiYWZmSWQiOiJkZWZhdWx0IiwiYmFubmVkIjpmYWxzZSwiYnJhbmQiOiJzdW4ud2luIiwiZW1haWwiOiIiLCJ0aW1lc3RhbXAiOjE3Nzg5MjM4Mzk2NDQsImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0MzE1OmQxODA6MzQ1ODpkOGU5OmY2MDg6NjUyNyIsIm11dGUiOmZhbHNlLCJhdmF0YXIiOiJodHRwczovL2ltYWdlcy5zd2luc2hvcC5uZXQvaW1hZ2VzL2F2YXRhci9hdmF0YXJfMTAucG5nIiwicGxhdGZvcm1JZCI6MiwidXNlcklkIjoiMDAzNzQwNjgtOGJmYi00OTU2LTliMTItMjg5M2MzMTA3MTYwIiwiZW1haWxWZXJpZmllZCI6bnVsbCwicmVnVGltZSI6MTc0NTU5MjY1NTgwNywicGhvbmUiOiI4NDMyOTY4OTk3MSIsImRlcG9zaXQiOnRydWUsInVzZXJuYW1lIjoiU0Nfc29uZ3ZlZGVtMTAifQ.1F_19PpgqB4-XVh6NwsaTPrP8OAIWkSoBkAbPrAtLxI";
 const WS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Origin": "https://play.sun.win"
 };
-const RECONNECT_DELAY = 2500;
-const PING_INTERVAL = 15000;
 
 const initialMessages = [
-    [
-        1,
-        "MiniGame",
-        "SC_songvedem10",
-        "Songvedem10",
-        {
-            "info": "{\"ipAddress\":\"113.175.100.57\",\"wsToken\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOnRydWUsInBsYXlFdmVudExvYmJ5IjpmYWxzZSwiY3VzdG9tZXJJZCI6MjM5OTUzMjE1LCJhZmZJZCI6ImRlZmF1bHQiLCJiYW5uZWQiOmZhbHNlLCJicmFuZCI6InN1bi53aW4iLCJlbWFpbCI6IiIsInRpbWVzdGFtcCI6MTc3ODA0MzQyMjAxNiwibG9ja0dhbWVzIjpbXSwiYW1vdW50IjowLCJsb2NrQ2hhdCI6ZmFsc2UsInBob25lVmVyaWZpZWQiOnRydWUsImlwQWRkcmVzcyI6IjExMy4xNzUuMTAwLjU3IiwibXV0ZSI6ZmFsc2UsImF2YXRhciI6Imh0dHBzOi8vaW1hZ2VzLnN3aW5zaG9wLm5ldC9pbWFnZXMvYXZhdGFyL2F2YXRhcl8xMC5wbmciLCJwbGF0Zm9ybUlkIjoyLCJ1c2VySWQiOiIwMDM3NDA2OC04YmZiLTQ5NTYtOWIxMi0yODkzYzMxMDcxNjAiLCJlbWFpbFZlcmlmaWVkIjpudWxsLCJyZWdUaW1lIjoxNzQ1NTkyNjU1ODA3LCJwaG9uZSI6Ijg0MzI5Njg5OTcxIiwiZGVwb3NpdCI6dHJ1ZSwidXNlcm5hbWUiOiJTQ19zb25ndmVkZW0xMCJ9.4jl_XtPCRLFuSOrBlfAtaSz3kg27oIqZFqcHwPv34G0\",\"locale\":\"vi\",\"userId\":\"00374068-8bfb-4956-9b12-2893c3107160\",\"username\":\"SC_songvedem10\",\"timestamp\":1777867255775,\"refreshToken\":\"a48b8445b47545e8bf55b5ebcdd303c5.fd44c0a6c99b455c84c845298d835679\"}",
-            "signature": "366DB52754A4C6B5AE4D3169940BE3BB2C046D859898F0B7E6BDFA3F84069E77B309CE8EE69EA0482776D271C521EDC2D223503CA0B182D6F8DB9E4C0E49C9514DF7418F284DF0AD4F603F23018D0914A225350B66C82C2A17FC2297CF27BF13D4DDE48E06427520B0A99BB8EC0EA3A6947FD1D255BE3AB92C66F0DD475EF5F9"
-        }
-    ],
-    [6, "MiniGame", "taixiuPlugin", { cmd: 1005 }],
-    [6, "MiniGame", "lobbyPlugin", { cmd: 10001 }]
+    [1,"MiniGame","SC_songvedem10","Songvedem10",{"info":"{\"ipAddress\":\"2001:ee0:4315:d180:3458:d8e9:f608:6527\",\"wsToken\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjIzOTk1MzIxNSwiYWZmSWQiOiJkZWZhdWx0IiwiYmFubmVkIjpmYWxzZSwiYnJhbmQiOiJzdW4ud2luIiwiZW1haWwiOiIiLCJ0aW1lc3RhbXAiOjE3Nzg5MjM4Mzk2NDQsImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0MzE1OmQxODA6MzQ1ODpkOGU5OmY2MDg6NjUyNyIsIm11dGUiOmZhbHNlLCJhdmF0YXIiOiJodHRwczovL2ltYWdlcy5zd2luc2hvcC5uZXQvaW1hZ2VzL2F2YXRhci9hdmF0YXJfMTAucG5nIiwicGxhdGZvcm1JZCI6MiwidXNlcklkIjoiMDAzNzQwNjgtOGJmYi00OTU2LTliMTItMjg5M2MzMTA3MTYwIiwiZW1haWxWZXJpZmllZCI6bnVsbCwicmVnVGltZSI6MTc0NTU5MjY1NTgwNywicGhvbmUiOiI4NDMyOTY4OTk3MSIsImRlcG9zaXQiOnRydWUsInVzZXJuYW1lIjoiU0Nfc29uZ3ZlZGVtMTAifQ.1F_19PpgqB4-XVh6NwsaTPrP8OAIWkSoBkAbPrAtLxI\",\"locale\":\"vi\",\"userId\":\"00374068-8bfb-4956-9b12-2893c3107160\",\"username\":\"SC_songvedem10\",\"timestamp\":1778923839653,\"refreshToken\":\"5e048d7d51b445f3b49431094e74fdbd.9382a58d21644b41ac6142d5b3d33a00\"}","signature":"772221EF65224B5C211DDB703B1CA46F34505CF672C66D70AEF0F4D24C162777FE72B568EEDE51A3B465189369C42F5B61313F6C9246DC2B76DD9CFAA3848A344D8B2DF0B3E2CEBB609F7A2D3626445DB9BF77C1570CC6807889356A844A7D0FA294EE6D2DC54AF4769549AA481A6C7F179DF785D56C422C7A93A883C67C3047"}],
+    [6,"MiniGame","taixiuPlugin",{cmd:1005}],
+    [6,"MiniGame","lobbyPlugin",{cmd:10001}]
 ];
 
 let ws = null;
-let pingInterval = null;
-let reconnectTimeout = null;
-
-const getNetworkInfo = () => {
-    const interfaces = os.networkInterfaces();
-    let localIP = '127.0.0.1';
-    let publicIP = null;
-    for (const ifaceName in interfaces) {
-        for (const iface of interfaces[ifaceName]) {
-            if (!iface.internal && iface.family === 'IPv4') {
-                localIP = iface.address;
-                break;
-            }
-        }
-    }
-    return { localIP, publicIP };
-};
 
 function connectWebSocket() {
-    if (ws) {
-        ws.removeAllListeners();
-        ws.close();
-    }
+    if (ws) { ws.removeAllListeners(); ws.close(); }
     ws = new WebSocket(WEBSOCKET_URL, { headers: WS_HEADERS });
 
     ws.on('open', () => {
@@ -96,13 +50,8 @@ function connectWebSocket() {
                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
             }, i * 600);
         });
-        clearInterval(pingInterval);
-        pingInterval = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) ws.ping();
-        }, PING_INTERVAL);
+        setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.ping(); }, 15000);
     });
-
-    ws.on('pong', () => console.log('[📶] Ping OK - Connection stable'));
 
     ws.on('message', (message) => {
         try {
@@ -120,35 +69,19 @@ function connectWebSocket() {
                 const total = d1 + d2 + d3;
                 const result = (total > 10) ? "Tài" : "Xỉu";
 
+                // Cập nhật cho API Python
                 apiResponseData = {
-                    "Phien": currentSessionId,
-                    "Xuc_xac_1": d1,
-                    "Xuc_xac_2": d2,
-                    "Xuc_xac_3": d3,
-                    "Tong": total,
-                    "Ket_qua": result,
-                    "id": "dark",
-                    "server_time": new Date().toISOString(),
-                    "update_count": (apiResponseData.update_count || 0) + 1
+                    "Phien": currentSessionId, "Xuc_xac_1": d1, "Xuc_xac_2": d2, "Xuc_xac_3": d3,
+                    "Tong": total, "Ket_qua": result, "id": "dark", "server_time": new Date().toISOString()
                 };
                 
+                // Cập nhật cho UI Dashboard
                 dashboardData.Phien = currentSessionId;
                 dashboardData.Ket_qua = result;
                 dashboardData.Tong = total;
-                // 👇 DÒNG NÀY ĐÃ ĐƯỢC THÊM ĐỂ HIỂN THỊ ĐÚNG MẢNG XÚC XẮC 👇
                 dashboardData.Xuc_xac = [d1, d2, d3];
                 
                 console.log(`[🎲] Phiên ${apiResponseData.Phien}: ${d1}-${d2}-${d3} = ${total} (${result})`);
-                
-                patternHistory.push({
-                    session: currentSessionId,
-                    dice: [d1, d2, d3],
-                    total: total,
-                    result: result,
-                    timestamp: new Date().toISOString()
-                });
-                
-                if (patternHistory.length > 100) patternHistory.shift();
                 currentSessionId = null;
             }
         } catch (e) {
@@ -156,73 +89,18 @@ function connectWebSocket() {
         }
     });
 
-    ws.on('close', (code, reason) => {
-        console.log(`[🔌] WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
-        clearInterval(pingInterval);
-        clearTimeout(reconnectTimeout);
-        reconnectTimeout = setTimeout(connectWebSocket, RECONNECT_DELAY);
-    });
-
-    ws.on('error', (err) => {
-        console.error('[❌] WebSocket error:', err.message);
-        ws.close();
-    });
+    ws.on('close', () => setTimeout(connectWebSocket, 2500));
+    ws.on('error', () => ws.close());
 }
 
-// ===================================
 // CÁC ROUTES API
-// ===================================
-
-// Nhận dự đoán từ Python AI
 app.post('/api/update-prediction', (req, res) => {
-    dashboardData.ai_prediction = {
-        ...dashboardData.ai_prediction,
-        ...req.body
-    };
+    dashboardData.ai_prediction = { ...dashboardData.ai_prediction, ...req.body };
     res.json({ success: true });
 });
 
-// Trả về Data cho file Python cào
-app.get('/api/ddvipro', (req, res) => {
-    res.json(apiResponseData);
-});
-
-// API lấy data cho giao diện Dashboard
-app.get('/api/data', (req, res) => {
-    res.json(dashboardData);
-});
-
-app.get('/api/history', (req, res) => {
-    res.json({
-        current: apiResponseData,
-        history: patternHistory.slice(-20),
-        total_requests: apiResponseData.update_count || 0
-    });
-});
-
-app.get('/api/stats', (req, res) => {
-    const taiCount = patternHistory.filter(item => item.result === "Tài").length;
-    const xiuCount = patternHistory.filter(item => item.result === "Xỉu").length;
-    res.json({
-        total_sessions: patternHistory.length,
-        tai_count: taiCount,
-        xiu_count: xiuCount,
-        tai_percentage: patternHistory.length > 0 ? ((taiCount / patternHistory.length) * 100).toFixed(2) : 0,
-        xiu_percentage: patternHistory.length > 0 ? ((xiuCount / patternHistory.length) * 100).toFixed(2) : 0,
-        last_update: apiResponseData.server_time,
-        server_uptime: process.uptime().toFixed(0) + 's'
-    });
-});
-
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'online',
-        websocket: ws ? ws.readyState === WebSocket.OPEN : false,
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        connections: ws ? 'connected' : 'disconnected'
-    });
-});
+app.get('/api/ddvipro', (req, res) => res.json(apiResponseData));
+app.get('/api/data', (req, res) => res.json(dashboardData));
 
 app.get('/', (req, res) => {
     res.send(`
@@ -231,7 +109,7 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>SunWin AI Dashboard V17</title>
+        <title>SunWin AI Dashboard V17 - Đọc Vị</title>
         <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 10px; }
             .container { max-width: 500px; margin: 0 auto; }
@@ -254,28 +132,28 @@ app.get('/', (req, res) => {
     <body>
         <div class="container">
             <div class="card prediction-card">
-                <div class="status-badge status-online">AI LIVE V17</div>
+                <div class="status-badge status-online">AI ĐỌC VỊ LIVE</div>
                 <div id="next-session" style="color: #94a3b8; font-size: 16px;">Phiên tiếp theo: --</div>
                 <div id="ai-result" class="big-text">ĐANG QUÉT...</div>
                 <div id="ai-detail" style="font-size: 14px; color: #94a3b8;">Đang chờ dữ liệu mồi...</div>
             </div>
 
             <div class="card">
-                <h3 style="margin-top: 0;">📊 Thống kê phiên</h3>
+                <h3 style="margin-top: 0;">📊 Thống kê (15 ván gần nhất)</h3>
                 <div class="stats-grid">
                     <div class="stat-box">
-                        <div style="font-size: 12px; color: #94a3b8;">Win Rate</div>
+                        <div style="font-size: 12px; color: #94a3b8;">Win Rate (Rolling 15)</div>
                         <div id="wr-val" style="font-size: 24px; font-weight: bold; color: #fbbf24;">0%</div>
                     </div>
                     <div class="stat-box">
-                        <div style="font-size: 12px; color: #94a3b8;">Tổng cược</div>
+                        <div style="font-size: 12px; color: #94a3b8;">Số ván đã đánh</div>
                         <div id="total-val" style="font-size: 24px; font-weight: bold;">0</div>
                     </div>
                 </div>
             </div>
 
             <div class="card">
-                <h3 style="margin-top: 0;">📜 Lịch sử 20 ván gần nhất</h3>
+                <h3 style="margin-top: 0;">📜 Lịch sử Bot Chốt</h3>
                 <table id="history-table">
                     <thead><tr><th>Phiên</th><th>AI Chốt</th><th>Kết quả</th><th>Status</th></tr></thead>
                     <tbody></tbody>
@@ -287,7 +165,6 @@ app.get('/', (req, res) => {
             function updateDashboard() {
                 fetch('/api/data').then(res => res.json()).then(data => {
                     const ai = data.ai_prediction;
-                    
                     if(data.Phien !== "Đang chờ...") {
                         document.getElementById('next-session').innerText = "Phiên tiếp theo: " + (data.Phien + 1);
                     }
@@ -297,15 +174,13 @@ app.get('/', (req, res) => {
                     resDiv.className = 'big-text ' + (ai.result === 'TÀI' ? 'tai' : (ai.result === 'XỈU' ? 'xiu' : ''));
                     document.getElementById('ai-detail').innerText = ai.detail;
                     document.getElementById('wr-val').innerText = ai.win_rate + "%";
-                    document.getElementById('total-val').innerText = ai.total_played;
+                    document.getElementById('total-val').innerText = ai.total_played + "/15";
 
-                    // Cập nhật bảng lịch sử
                     const tbody = document.querySelector('#history-table tbody');
                     tbody.innerHTML = (ai.history || []).map(h => {
                          let statusBadge = '<span class="badge-wait">⏳ Chờ</span>';
                          if (h.win === true) statusBadge = '<span class="badge-win">✅ Húp</span>';
                          if (h.win === false) statusBadge = '<span class="badge-lose">❌ Gãy</span>';
-                         
                         return \`
                         <tr>
                             <td>\${h.phien}</td>
@@ -325,12 +200,6 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    const networkInfo = getNetworkInfo();
-    console.log(`\n=========================================`);
-    console.log(`🚀 api sunwin dd - Dashboard Ready`);
-    console.log(`=========================================`);
-    console.log(`   API TRẢ DATA : http://localhost:${PORT}/api/ddvipro`);
-    console.log(`   DASHBOARD    : http://localhost:${PORT}/`);
-    console.log(`=========================================\n`);
+    console.log(`🚀 API SUNWIN DD + UI DASHBOARD CHẠY TẠI PORT ${PORT}`);
     connectWebSocket();
 });
