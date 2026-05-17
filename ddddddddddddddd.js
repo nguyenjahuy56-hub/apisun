@@ -145,10 +145,13 @@ app.get('/api/hitclub/data', (req, res) => res.json(hitclubDashboard));
 // API Python bắn dự đoán AI lên
 app.post('/api/sunwin/update-prediction', (req, res) => {
     sunwinDashboard.ai_prediction = { ...sunwinDashboard.ai_prediction, ...req.body };
+    console.log(`[🤖 SUNWIN AI] Đã nhận dự đoán từ Python: ${req.body.result}`);
     res.json({ success: true });
 });
+
 app.post('/api/hitclub/update-prediction', (req, res) => {
     hitclubDashboard.ai_prediction = { ...hitclubDashboard.ai_prediction, ...req.body };
+    console.log(`[🤖 HITCLUB AI] Đã nhận dự đoán từ Python: ${req.body.result}`);
     res.json({ success: true });
 });
 
