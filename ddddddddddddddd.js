@@ -314,7 +314,7 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n${'═'.repeat(50)}`);
-    console.log(`🚀 MULTI-AI DASHBOARD by dark (SUNWIN + HITCLUB) CHẠY PORT ${PORT}`);
+    console.log(`🚀 MULTI-AI DASHBOARD by daảkkk (SUNWIN + HITCLUB) CHẠY PORT ${PORT}`);
     console.log(`${'═'.repeat(50)}`);
     connectSunWin();
     fetchHitClubTXMD5();
