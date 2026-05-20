@@ -1,59 +1,101 @@
 const WebSocket = require('ws');
 const express = require('express');
 const cors = require('cors');
+const os = require('os');
+const network = require('network');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // BẮT BUỘC ĐỂ NHẬN DATA TỪ PYTHON
 
 const PORT = process.env.PORT || 3001;
 
-// ==========================================
-// 1. STATE & CẤU HÌNH SUNWIN
-// ==========================================
-const SUNWIN_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOnRydWUsInBsYXlFdmVudExvYmJ5IjpmYWxzZSwiY3VzdG9tZXJJZCI6MjM5OTUzMjE1LCJhZmZJZCI6ImRlZmF1bHQiLCJiYW5uZWQiOmZhbHNlLCJicmFuZCI6InN1bi53aW4iLCJlbWFpbCI6IiIsInRpbWVzdGFtcCI6MTc3OTI1Mjk4NjMyMywibG9ja0dhbWVzIjpbXSwiYW1vdW50IjowLCJsb2NrQ2hhdCI6ZmFsc2UsInBob25lVmVyaWZpZWQiOnRydWUsImlwQWRkcmVzcyI6IjIwMDE6ZWUwOjQzMTU6ZDE4MDo5MDNhOjg5MGE6YzFiZTo3ZmY0IiwibXV0ZSI6ZmFsc2UsImF2YXRhciI6Imh0dHBzOi8vaW1hZ2VzLnN3aW5zaG9wLm5ldC9pbWFnZXMvYXZhdGFyL2F2YXRhcl8xMC5wbmciLCJwbGF0Zm9ybUlkIjoyLCJ1c2VySWQiOiIwMDM3NDA2OC04YmZiLTQ5NTYtOWIxMi0yODkzYzMxMDcxNjAiLCJlbWFpbFZlcmlmaWVkIjpudWxsLCJyZWdUaW1lIjoxNzQ1NTkyNjU1ODA3LCJwaG9uZSI6Ijg0MzI5Njg5OTcxIiwiZGVwb3NpdCI6dHJ1ZSwidXNlcm5hbWUiOiJTQ19zb25ndmVkZW0xMCJ9.4qV7GlFdleDSZPmukQl65KS-h37g-BoFqFTAc4sWeCY";
-const SUNWIN_WEBSOCKET_URL = `wss://websocket.azhkthg1.net/websocket?token=${SUNWIN_TOKEN}`;
-const SUNWIN_INFO = JSON.stringify({
-    "ipAddress": "2001:ee0:4315:d180:903a:890a:c1be:7ff4",
-    "wsToken": SUNWIN_TOKEN,
-    "locale": "vi",
-    "userId": "00374068-8bfb-4956-9b12-2893c3107160",
-    "username": "SC_songvedem10",
-    "timestamp": 1779252986335,
-    "refreshToken": "5e048d7d51b445f3b49431094e74fdbd.9382a58d21644b41ac6142d5b3d33a00"
-});
-const SUNWIN_SIGNATURE = "7656882A17C57AE9FE7512EF7B113BCD6E61F912A1446E10F0FCDD2A0E136A61732654E5F799D1F81A426ABDB3C94E02B60FA93D85653D80D7C5ECEFD7CDB66BDBB4BF911633CFF43124D2607428D283EBE2337579D3CF8A54CFD24AF5CC430F6F9F5DD637EA7EA9F65FA445CE8F8ED3B1B641317FF8F1FC92A9621B1B5066A0";
-
-const SUNWIN_WS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Origin": "https://play.sun.win"
+let apiResponseData = {
+    "Phien": null,
+    "Xuc_xac_1": null,
+    "Xuc_xac_2": null,
+    "Xuc_xac_3": null,
+    "Tong": null,
+    "Ket_qua": "",
+    "id": "dd",
+    "server_time": new Date().toISOString()
 };
 
-const sunwinInitialMessages = [
-    [1, "MiniGame", "SC_songvedem10", "Songvedem10", { "info": SUNWIN_INFO, "signature": SUNWIN_SIGNATURE }],
+// Biến lưu trữ dự đoán từ AI XGBoost
+let currentAIPrediction = {
+    result: "WAIT",
+    confidence: 0,
+    detail: "Đang cào data lịch sử..."
+};
+
+let currentSessionId = null;
+const patternHistory = []; // Mảng lưu trữ tối đa 500 phiên gần nhất
+
+// ĐÃ CẬP NHẬT: WEBSOCKET_URL với wsToken mới
+const WEBSOCKET_URL = "wss://websocket.azhkthg1.net/websocket?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjIzOTk1MzIxNSwiYWZmSWQiOiJkZWZhdWx0IiwiYmFubmVkIjpmYWxzZSwiYnJhbmQiOiJzdW4ud2luIiwiZW1haWwiOiIiLCJ0aW1lc3RhbXAiOjE3NzkyOTA5MzY0OTIsImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0MzE1OmQxODA6YmNmOTpjNDo2Yjk4OmMyZmUiLCJtdXRlIjpmYWxzZSwiYXZhdGFyIjoiaHR0cHM6Ly9pbWFnZXMuc3dpbnNob3AubmV0L2ltYWdlcy9hdmF0YXIvYXZhdGFyXzEwLnBuZyIsInBsYXRmb3JtSWQiOjIsInVzZXJJZCI6IjAwMzc0MDY4LThiZmItNDk1Ni05YjEyLTI4OTNjMzEwNzE2MCIsImVtYWlsVmVyaWZpZWQiOm51bGwsInJlZ1RpbWUiOjE3NDU1OTI2NTU4MDcsInBob25lIjoiODQzMjk2ODk5NzEiLCJkZXBvc2l0Ijp0cnVlLCJ1c2VybmFtZSI6IlNDX3Nvbmd2ZWRlbTEwIn0.3DrTKiNZ5WQC-4ZLIZaFuazwlLm0A-LJnfak3rqbNcw";
+const WS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Origin": "https://play.sun.win"
+};
+const RECONNECT_DELAY = 2500;
+const PING_INTERVAL = 15000;
+
+// ĐÃ CẬP NHẬT: info và signature mới nhất
+const initialMessages = [
+    [
+        1,
+        "MiniGame",
+        "SC_songvedem10",
+        "Songvedem10",
+        {
+            "info": "{\"ipAddress\":\"2001:ee0:4315:d180:bcf9:c4:6b98:c2fe\",\"wsToken\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjIzOTk1MzIxNSwiYWZmSWQiOiJkZWZhdWx0IiwiYmFubmVkIjpmYWxzZSwiYnJhbmQiOiJzdW4ud2luIiwiZW1haWwiOiIiLCJ0aW1lc3RhbXAiOjE3NzkyOTA5MzY0OTIsImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0MzE1OmQxODA6YmNmOTpjNDo2Yjk4OmMyZmUiLCJtdXRlIjpmYWxzZSwiYXZhdGFyIjoiaHR0cHM6Ly9pbWFnZXMuc3dpbnNob3AubmV0L2ltYWdlcy9hdmF0YXIvYXZhdGFyXzEwLnBuZyIsInBsYXRmb3JtSWQiOjIsInVzZXJJZCI6IjAwMzc0MDY4LThiZmItNDk1Ni05YjEyLTI4OTNjMzEwNzE2MCIsImVtYWlsVmVyaWZpZWQiOm51bGwsInJlZ1RpbWUiOjE3NDU1OTI2NTU4MDcsInBob25lIjoiODQzMjk2ODk5NzEiLCJkZXBvc2l0Ijp0cnVlLCJ1c2VybmFtZSI6IlNDX3Nvbmd2ZWRlbTEwIn0.3DrTKiNZ5WQC-4ZLIZaFuazwlLm0A-LJnfak3rqbNcw\",\"locale\":\"vi\",\"userId\":\"00374068-8bfb-4956-9b12-2893c3107160\",\"username\":\"SC_songvedem10\",\"timestamp\":1779290936506,\"refreshToken\":\"0b0056ad2ec74484a9562b98116ddde8.31411eb269f741cd9d2fcc3d4978e12a\"}",
+            "signature": "2D97277D94FC33506F347B491433C077BFCF0BB54D0C01F4A47209148B0420EF1162E29DE4CEF4D4C550D6E283F0CA2FB037F93ECA007573FA7DF21A16E6295F3134F7BF427F99B8A6E6A6AAEC11FF83C7F9AC8B205A8892D9BDC655E1B70B0256DAA6ED7B329008DBE0E8B585C3A15143D4B6999F02D3FC1795739264F9AD5B"
+        }
+    ],
     [6, "MiniGame", "taixiuPlugin", { cmd: 1005 }],
     [6, "MiniGame", "lobbyPlugin", { cmd: 10001 }]
 ];
 
-let sunwinApiData = { "Phien": null, "Xuc_xac_1": null, "Xuc_xac_2": null, "Xuc_xac_3": null, "Tong": null, "Ket_qua": "", "id": "sunwin", "server_time": new Date().toISOString() };
-let sunwinDashboard = {
-    Phien: "Đang chờ...", Ket_qua: "--", Xuc_xac: [0, 0, 0], Tong: 0,
-    ai_prediction: { result: "WAIT", confidence: 0, detail: "Đang phân tích...", win_rate: 0, total_played: 0, history: [] }
-};
-let sunwinSessionId = null;
 let ws = null;
+let pingInterval = null;
+let reconnectTimeout = null;
 
-function connectSunWin() {
-    if (ws) { ws.removeAllListeners(); ws.close(); }
-    ws = new WebSocket(SUNWIN_WEBSOCKET_URL, { headers: SUNWIN_WS_HEADERS });
+const getNetworkInfo = () => {
+    const interfaces = os.networkInterfaces();
+    let localIP = '127.0.0.1';
+    let publicIP = null;
+    for (const ifaceName in interfaces) {
+        for (const iface of interfaces[ifaceName]) {
+            if (!iface.internal && iface.family === 'IPv4') {
+                localIP = iface.address;
+                break;
+            }
+        }
+    }
+    return { localIP, publicIP };
+};
+
+function connectWebSocket() {
+    if (ws) {
+        ws.removeAllListeners();
+        ws.close();
+    }
+    ws = new WebSocket(WEBSOCKET_URL, { headers: WS_HEADERS });
 
     ws.on('open', () => {
-        console.log('[✅] Đã kết nối WebSocket Sun.Win');
-        sunwinInitialMessages.forEach((msg, i) => {
-            setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }, i * 600);
+        console.log('[✅] WebSocket connected to Sun.Win');
+        initialMessages.forEach((msg, i) => {
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+            }, i * 600);
         });
-        setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.ping(); }, 15000);
+        clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.ping();
+        }, PING_INTERVAL);
     });
+
+    ws.on('pong', () => console.log('[📶] Ping OK - Connection stable'));
 
     ws.on('message', (message) => {
         try {
@@ -62,8 +104,8 @@ function connectSunWin() {
             const { cmd, sid, d1, d2, d3, gBB } = data[1];
 
             if (cmd === 1008 && sid) {
-                sunwinSessionId = sid;
-                console.log(`[🎮 SUNWIN] Phiên mới: ${sid}`);
+                currentSessionId = sid;
+                console.log(`[🎮] Phiên mới: ${sid}`);
             }
 
             if (cmd === 1003 && gBB) {
@@ -71,251 +113,173 @@ function connectSunWin() {
                 const total = d1 + d2 + d3;
                 const result = (total > 10) ? "Tài" : "Xỉu";
 
-                sunwinApiData = { "Phien": sunwinSessionId, "Xuc_xac_1": d1, "Xuc_xac_2": d2, "Xuc_xac_3": d3, "Tong": total, "Ket_qua": result, "id": "sunwin", "server_time": new Date().toISOString() };
-                sunwinDashboard.Phien = sunwinSessionId; sunwinDashboard.Ket_qua = result; sunwinDashboard.Tong = total; sunwinDashboard.Xuc_xac = [d1, d2, d3];
-
-                console.log(`[🎲 SUNWIN] Phiên ${sunwinSessionId}: ${d1}-${d2}-${d3} = ${total} (${result})`);
-                sunwinSessionId = null;
-            }
-        } catch (e) { }
-    });
-    ws.on('close', () => setTimeout(connectSunWin, 2500));
-    ws.on('error', () => ws.close());
-}
-
-// ==========================================
-// 2. STATE & CẤU HÌNH HITCLUB MD5
-// ==========================================
-const HITCLUB_API_URL = "https://jakpotgwab.geightdors.net/glms/v1/notify/taixiu?platform_id=g8&gid=vgmn_101";
-
-let hitclubApiData = { "Phien": null, "Xuc_xac_1": null, "Xuc_xac_2": null, "Xuc_xac_3": null, "Tong": null, "Ket_qua": "", "id": "hitclub", "server_time": new Date().toISOString() };
-let hitclubDashboard = {
-    Phien: "Đang chờ...", Ket_qua: "--", Xuc_xac: [0, 0, 0], Tong: 0,
-    ai_prediction: { result: "WAIT", confidence: 0, detail: "Đang phân tích...", win_rate: 0, total_played: 0, history: [] }
-};
-let hitclubLastPhien = "";
-
-async function fetchHitClubTXMD5() {
-    try {
-        const response = await fetch(HITCLUB_API_URL, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json" }
-        });
-        if (!response.ok) return;
-        const jsonData = await response.json();
-        
-        if (jsonData.status === 'OK' && Array.isArray(jsonData.data)) {
-            let newDataFound = false;
-            let currentDices = null;
-
-            jsonData.data.forEach(game => {
-                if (game.cmd === 2006 && game.sid !== undefined && game.d1 !== undefined) {
-                    if (game.sid.toString() !== hitclubLastPhien) {
-                        hitclubLastPhien = game.sid.toString();
-                        newDataFound = true;
-                        currentDices = [game.d1, game.d2, game.d3];
-                    }
-                }
-            });
-
-            if (newDataFound && currentDices) {
-                const total = currentDices.reduce((a, b) => a + b, 0);
-                const result = (total >= 11) ? "Tài" : "Xỉu";
-
-                hitclubApiData = { "Phien": hitclubLastPhien, "Xuc_xac_1": currentDices[0], "Xuc_xac_2": currentDices[1], "Xuc_xac_3": currentDices[2], "Tong": total, "Ket_qua": result, "id": "hitclub", "server_time": new Date().toISOString() };
-                hitclubDashboard.Phien = hitclubLastPhien; hitclubDashboard.Ket_qua = result; hitclubDashboard.Tong = total; hitclubDashboard.Xuc_xac = currentDices;
+                // Cập nhật thông tin phiên hiện tại
+                apiResponseData = {
+                    "Phien": currentSessionId,
+                    "Xuc_xac_1": d1,
+                    "Xuc_xac_2": d2,
+                    "Xuc_xac_3": d3,
+                    "Tong": total,
+                    "Ket_qua": result,
+                    "id": "dark",
+                    "server_time": new Date().toISOString(),
+                    "update_count": (apiResponseData.update_count || 0) + 1
+                };
                 
-                console.log(`[🎲 HITCLUB] Phiên ${hitclubLastPhien}: ${currentDices.join('-')} = ${total} (${result})`);
+                console.log(`[🎲] Phiên ${apiResponseData.Phien}: ${d1}-${d2}-${d3} = ${total} (${result})`);
+                
+                // ĐÃ CẬP NHẬT: Dùng unshift để thêm phiên mới lên đầu mảng (Index 0 = Mới nhất)
+                patternHistory.unshift({
+                    "Phien": currentSessionId,
+                    "Xuc_xac_1": d1,
+                    "Xuc_xac_2": d2,
+                    "Xuc_xac_3": d3,
+                    "Tong": total,
+                    "Ket_qua": result,
+                    "timestamp": new Date().toISOString()
+                });
+                
+                // Giới hạn max 500 phiên (Xóa phần tử cuối cùng nếu mảng vượt 500)
+                if (patternHistory.length > 500) patternHistory.pop();
+                
+                currentSessionId = null;
             }
+        } catch (e) {
+            console.error('[❌] Lỗi xử lý message:', e.message);
         }
-    } catch (e) {}
+    });
+
+    ws.on('close', (code, reason) => {
+        console.log(`[🔌] WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
+        clearInterval(pingInterval);
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = setTimeout(connectWebSocket, RECONNECT_DELAY);
+    });
+
+    ws.on('error', (err) => {
+        console.error('[❌] WebSocket error:', err.message);
+        ws.close();
+    });
 }
-setInterval(fetchHitClubTXMD5, 3000);
 
-// ==========================================
-// 3. API ROUTES (CHO PYTHON GỌI)
-// ==========================================
-// API Lấy dữ liệu Xúc xắc
-app.get('/api/sunwin/live', (req, res) => res.json(sunwinApiData));
-app.get('/api/hitclub/live', (req, res) => res.json(hitclubApiData));
+// ===================================
+// CÁC ROUTES API
+// ===================================
 
-// API UI Dashboard gọi để render
-app.get('/api/sunwin/data', (req, res) => res.json(sunwinDashboard));
-app.get('/api/hitclub/data', (req, res) => res.json(hitclubDashboard));
-
-// API Python bắn dự đoán AI lên
-app.post('/api/sunwin/update-prediction', (req, res) => {
-    sunwinDashboard.ai_prediction = { ...sunwinDashboard.ai_prediction, ...req.body };
-    console.log(`[🤖 SUNWIN AI] Đã nhận dự đoán từ Python: ${req.body.result}`);
+// Nhận dự đoán từ Python AI
+app.post('/api/update-prediction', (req, res) => {
+    currentAIPrediction = req.body;
     res.json({ success: true });
 });
 
-app.post('/api/hitclub/update-prediction', (req, res) => {
-    hitclubDashboard.ai_prediction = { ...hitclubDashboard.ai_prediction, ...req.body };
-    console.log(`[🤖 HITCLUB AI] Đã nhận dự đoán từ Python: ${req.body.result}`);
-    res.json({ success: true });
+// Trả về Data + Lịch sử 500 phiên (Từ mới đến cũ) + Dự đoán AI cho Giao diện HTML / Ứng dụng khác
+app.get('/api/ddvipro', (req, res) => {
+    res.json({
+        ...apiResponseData,
+        history: patternHistory,  // <-- Đã thêm mảng 500 phiên
+        ai_prediction: currentAIPrediction
+    });
 });
 
-// ==========================================
-// 4. GIAO DIỆN DASHBOARD HTML V20 (DUAL TABS)
-// ==========================================
+app.get('/api/history', (req, res) => {
+    res.json({
+        current: apiResponseData,
+        history: patternHistory, // Lấy toàn bộ mảng lịch sử (tối đa 500)
+        total_requests: apiResponseData.update_count || 0
+    });
+});
+
+app.get('/api/stats', (req, res) => {
+    const taiCount = patternHistory.filter(item => item.Ket_qua === "Tài").length;
+    const xiuCount = patternHistory.filter(item => item.Ket_qua === "Xỉu").length;
+    res.json({
+        total_sessions: patternHistory.length,
+        tai_count: taiCount,
+        xiu_count: xiuCount,
+        tai_percentage: patternHistory.length > 0 ? ((taiCount / patternHistory.length) * 100).toFixed(2) : 0,
+        xiu_percentage: patternHistory.length > 0 ? ((xiuCount / patternHistory.length) * 100).toFixed(2) : 0,
+        last_update: apiResponseData.server_time,
+        server_uptime: process.uptime().toFixed(0) + 's'
+    });
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'online',
+        websocket: ws ? ws.readyState === WebSocket.OPEN : false,
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        connections: ws ? 'connected' : 'disconnected'
+    });
+});
+
 app.get('/', (req, res) => {
-    res.send(`
+    const networkInfo = getNetworkInfo();
+    const html = `
     <!DOCTYPE html>
-    <html lang="vi">
+    <html>
     <head>
+        <title>Sun.Win Data Stream</title>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ALL-IN-ONE AI Dashboard - SunWin & HitClub</title>
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 10px; }
-            .container { max-width: 500px; margin: 0 auto; }
-            
-            /* Tabs Styling */
-            .tabs-container { display: flex; margin-bottom: 15px; border-radius: 10px; overflow: hidden; background: #1e293b; }
-            .tab-btn { flex: 1; padding: 15px; background: transparent; color: #94a3b8; border: none; font-weight: bold; font-size: 16px; cursor: pointer; transition: 0.3s; }
-            .tab-btn.active.sunwin { background: #3b82f6; color: white; }
-            .tab-btn.active.hitclub { background: #eab308; color: #111827; }
-            .tab-content { display: none; }
-            .tab-content.active { display: block; }
-
-            .card { background: #1e293b; border-radius: 15px; padding: 20px; margin-bottom: 15px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-left: 5px solid; }
-            .card.sunwin { border-left-color: #3b82f6; }
-            .card.hitclub { border-left-color: #eab308; }
-            .prediction-card { text-align: center; border-left-color: #10b981 !important; }
-            
-            .status-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 10px; }
-            .status-online { background: #064e3b; color: #34d399; }
-            .big-text { font-size: 40px; font-weight: 800; margin: 10px 0; }
-            .tai { color: #f87171; } .xiu { color: #60a5fa; }
-            
-            .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-            .stat-box { background: #334155; padding: 10px; border-radius: 10px; text-align: center; }
-            table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-            th { text-align: left; color: #94a3b8; padding: 8px; border-bottom: 1px solid #334155; }
-            td { padding: 8px; border-bottom: 1px solid #334155; text-align: left; }
-            .badge-win { color: #34d399; font-weight: bold; }
-            .badge-lose { color: #f87171; font-weight: bold; }
-            .badge-wait { color: #fbbf24; font-weight: bold; }
+            body { font-family: Arial, sans-serif; margin: 20px; background: #0a0a0a; color: #00ff00; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            .header { text-align: center; padding: 20px; background: #111; border-radius: 10px; margin-bottom: 20px; }
+            .data-box { background: #111; padding: 20px; border-radius: 10px; margin: 10px 0; }
+            .live-data { font-size: 2em; font-weight: bold; color: #00ff00; }
+            .tai { color: #00ff00; }
+            .xiu { color: #ff0000; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <div class="tabs-container">
-                <button class="tab-btn active sunwin" onclick="switchTab('sunwin')">♠️ SUNWIN</button>
-                <button class="tab-btn" onclick="switchTab('hitclub')">♦️ HITCLUB MD5</button>
+            <div class="header">
+                <h1>🔴 Sun.Win Live Data Stream</h1>
+                <p>Worm GPT Edition - Server: ${networkInfo.localIP}:${PORT}</p>
             </div>
-
-            <div id="tab-sunwin" class="tab-content active">
-                <div class="card prediction-card">
-                    <div class="status-badge status-online">AI SUNWIN ĐANG LIVE</div>
-                    <div id="sw-next-session" style="color: #94a3b8; font-size: 16px;">Phiên tiếp theo: --</div>
-                    <div id="sw-ai-result" class="big-text">ĐANG QUÉT...</div>
-                    <div id="sw-ai-detail" style="font-size: 14px; color: #94a3b8;">Đang chờ dữ liệu mồi...</div>
-                </div>
-                <div class="card sunwin">
-                    <h3 style="margin-top: 0;">📊 Thống kê (15 ván gần nhất)</h3>
-                    <div class="stats-grid">
-                        <div class="stat-box"><div style="font-size: 12px; color: #94a3b8;">Win Rate</div><div id="sw-wr-val" style="font-size: 24px; font-weight: bold; color: #fbbf24;">0%</div></div>
-                        <div class="stat-box"><div style="font-size: 12px; color: #94a3b8;">Số ván đã đánh</div><div id="sw-total-val" style="font-size: 24px; font-weight: bold;">0</div></div>
+            <div class="grid">
+                <div class="data-box">
+                    <h2>🎲 Current Result</h2>
+                    <div class="live-data \${apiResponseData.Ket_qua === 'Tài' ? 'tai' : 'xiu'}">
+                        \${apiResponseData.Tong ? \`\${apiResponseData.Xuc_xac_1}-\${apiResponseData.Xuc_xac_2}-\${apiResponseData.Xuc_xac_3} = \${apiResponseData.Tong} (\${apiResponseData.Ket_qua})\` : 'Waiting...'}
                     </div>
+                    <p>Phiên: \${apiResponseData.Phien || 'N/A'}</p>
                 </div>
-                <div class="card sunwin">
-                    <h3 style="margin-top: 0;">📜 Lịch sử Bot Chốt</h3>
-                    <table id="sw-history-table">
-                        <thead><tr><th>Phiên</th><th>AI Chốt</th><th>Kết quả</th><th>Status</th></tr></thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div id="tab-hitclub" class="tab-content">
-                <div class="card prediction-card">
-                    <div class="status-badge status-online">AI HITCLUB ĐANG LIVE</div>
-                    <div id="hc-next-session" style="color: #94a3b8; font-size: 16px;">Phiên tiếp theo: --</div>
-                    <div id="hc-ai-result" class="big-text">ĐANG QUÉT...</div>
-                    <div id="hc-ai-detail" style="font-size: 14px; color: #94a3b8;">Đang chờ dữ liệu mồi...</div>
-                </div>
-                <div class="card hitclub">
-                    <h3 style="margin-top: 0;">📊 Thống kê (15 ván gần nhất)</h3>
-                    <div class="stats-grid">
-                        <div class="stat-box"><div style="font-size: 12px; color: #94a3b8;">Win Rate</div><div id="hc-wr-val" style="font-size: 24px; font-weight: bold; color: #fbbf24;">0%</div></div>
-                        <div class="stat-box"><div style="font-size: 12px; color: #94a3b8;">Số ván đã đánh</div><div id="hc-total-val" style="font-size: 24px; font-weight: bold;">0</div></div>
-                    </div>
-                </div>
-                <div class="card hitclub">
-                    <h3 style="margin-top: 0;">📜 Lịch sử Bot Chốt</h3>
-                    <table id="hc-history-table">
-                        <thead><tr><th>Phiên</th><th>AI Chốt</th><th>Kết quả</th><th>Status</th></tr></thead>
-                        <tbody></tbody>
-                    </table>
+                <div class="data-box">
+                    <h2>📊 API Endpoints</h2>
+                    <ul>
+                        <li><a href="/api/ddvipro" style="color:#00ffff;">/api/ddvipro</a> - Latest result, 500 history & AI</li>
+                        <li><a href="/api/history" style="color:#00ffff;">/api/history</a> - Full history endpoint</li>
+                    </ul>
                 </div>
             </div>
         </div>
-
         <script>
-            let currentTab = 'sunwin';
-
-            function switchTab(tab) {
-                currentTab = tab;
-                document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active', 'sunwin', 'hitclub'));
-                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-                
-                event.target.classList.add('active', tab);
-                document.getElementById('tab-' + tab).classList.add('active');
-                
-                updateDashboardData();
-            }
-
-            function renderData(prefix, data) {
-                const ai = data.ai_prediction;
-                if(data.Phien !== "Đang chờ..." && data.Phien !== null) {
-                    document.getElementById(prefix + '-next-session').innerText = "Phiên tiếp theo: " + (Number(data.Phien) + 1);
-                }
-                
-                const resDiv = document.getElementById(prefix + '-ai-result');
-                resDiv.innerText = ai.result;
-                resDiv.className = 'big-text ' + (ai.result === 'TÀI' ? 'tai' : (ai.result === 'XỈU' ? 'xiu' : ''));
-                document.getElementById(prefix + '-ai-detail').innerText = ai.detail;
-                document.getElementById(prefix + '-wr-val').innerText = ai.win_rate + "%";
-                document.getElementById(prefix + '-total-val').innerText = ai.total_played + "/15";
-
-                const tbody = document.querySelector('#' + prefix + '-history-table tbody');
-                tbody.innerHTML = (ai.history || []).map(h => {
-                    let statusBadge = '<span class="badge-wait">⏳ Chờ</span>';
-                    if (h.win === true) statusBadge = '<span class="badge-win">✅ Húp</span>';
-                    if (h.win === false) statusBadge = '<span class="badge-lose">❌ Gãy</span>';
-                    return \`<tr>
-                        <td>\${h.phien}</td>
-                        <td class="\${h.pred === 'TÀI' ? 'tai' : 'xiu'}">\${h.pred}</td>
-                        <td class="\${h.actual === 'TÀI' ? 'tai' : 'xiu'}">\${h.actual || '--'}</td>
-                        <td>\${statusBadge}</td>
-                    </tr>\`;
-                }).join('');
-            }
-
-            function updateDashboardData() {
-                if (currentTab === 'sunwin') {
-                    fetch('/api/sunwin/data').then(res => res.json()).then(data => renderData('sw', data));
-                } else {
-                    fetch('/api/hitclub/data').then(res => res.json()).then(data => renderData('hc', data));
-                }
-            }
-
             setInterval(() => {
-                // Auto update background data based on active tab
-                updateDashboardData();
-            }, 3000);
-            updateDashboardData();
+                fetch('/api/ddvipro')
+                    .then(res => res.json())
+                    .then(data => {
+                        if(data.Tong) {
+                            const resultDiv = document.querySelector('.live-data');
+                            resultDiv.textContent = \`\${data.Xuc_xac_1}-\${data.Xuc_xac_2}-\${data.Xuc_xac_3} = \${data.Tong} (\${data.Ket_qua})\`;
+                            resultDiv.className = \`live-data \${data.Ket_qua === 'Tài' ? 'tai' : 'xiu'}\`;
+                        }
+                    });
+            }, 5000);
         </script>
     </body>
     </html>
-    `);
+    `;
+    res.send(html);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n${'═'.repeat(50)}`);
-    console.log(`🚀 MULTI-AI DASHBOARD by daảkkk (SUNWIN + HITCLUB) CHẠY PORT ${PORT}`);
-    console.log(`${'═'.repeat(50)}`);
-    connectSunWin();
-    fetchHitClubTXMD5();
+    const networkInfo = getNetworkInfo();
+    console.log(`\n=========================================`);
+    console.log(`🚀 API SUNWIN DD - RUNNING`);
+    console.log(`=========================================`);
+    console.log(`   API MỚI: http://localhost:${PORT}/api/ddvipro`);
+    console.log(`=========================================\n`);
+    connectWebSocket();
 });
