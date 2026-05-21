@@ -73,8 +73,74 @@ const getNetworkInfo = () => {
     return { localIP, publicIP };
 };
 
+
 // ==========================================
-// 3. LOGIC WEBSOCKET SUNWIN
+// 3. TELEGRAM BOT & HỆ THỐNG BÁO ĐỘNG
+// ==========================================
+const TELE_BOT_TOKEN = '8516172972:AAFtVDGm5Eas6ratBM1OoJcGcMHpmKjgldg'; 
+const ALLOWED_CHAT_IDS = [8631760602, 8257979286]; // Thêm cả ID của ông và ông bạn
+
+const bot = new TelegramBot(TELE_BOT_TOKEN, {polling: true});
+
+// Tránh spam báo lỗi liên tục mỗi 2 giây
+let lastNotified = 0;
+function notifyAdmins(message) {
+    const now = Date.now();
+    if (now - lastNotified > 60000) { // Đợi 1 phút mới báo lỗi 1 lần
+        ALLOWED_CHAT_IDS.forEach(id => {
+            bot.sendMessage(id, message).catch(err => console.log(`Không thể gửi tin nhắn cho ${id}:`, err.message));
+        });
+        lastNotified = now;
+    }
+}
+
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text;
+
+    // Chặn người lạ (Kiểm tra xem ID có nằm trong mảng không)
+    if (!ALLOWED_CHAT_IDS.includes(chatId)) {
+        bot.sendMessage(chatId, "⚠️ Ai đấy? Bạn không có quyền truy cập hệ thống!");
+        return;
+    }
+
+    if (!text) return;
+
+    try {
+        const parsedData = JSON.parse(text);
+
+        if (parsedData && parsedData.data && parsedData.data.wsToken && parsedData.data.signature) {
+            
+            // Cập nhật biến cấu hình
+            SUNWIN_TOKEN = parsedData.data.wsToken;
+            SUNWIN_SIGNATURE = parsedData.data.signature;
+            SUNWIN_INFO = JSON.stringify(parsedData.data.info); 
+            WEBSOCKET_URL = `wss://websocket.azhkthg1.net/websocket?token=${SUNWIN_TOKEN}`;
+
+            // Gán lại gói tin mồi
+            initialMessages[0][4].info = SUNWIN_INFO;
+            initialMessages[0][4].signature = SUNWIN_SIGNATURE;
+
+            console.log(`[🔄 TELEGRAM] Admin (${chatId}) đã bơm JSON Sunwin thành công! Đang reconnect...`);
+            
+            // Reconnect
+            connectWebSocket();
+
+            bot.sendMessage(chatId, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data phà phà!");
+        } else {
+            bot.sendMessage(chatId, "⚠️ Có vẻ là JSON nhưng không chứa token hợp lệ của Sunwin.");
+        }
+    } catch (error) {
+        if (text.includes('{') || text.includes('}')) {
+             bot.sendMessage(chatId, "❌ Lỗi: Copy JSON bị thiếu/thừa ngoặc rồi! Thử dán lại xem.");
+        }
+    }
+});
+console.log("[🤖] Telegram Bot Admin đã khởi động, sẵn sàng nhận JSON!");
+
+
+// ==========================================
+// 4. LOGIC WEBSOCKET SUNWIN
 // ==========================================
 function connectWebSocket() {
     if (ws) {
@@ -140,6 +206,10 @@ function connectWebSocket() {
 
     ws.on('close', (code, reason) => {
         console.log(`[🔌] WebSocket closed. Code: ${code}`);
+        
+        // BÁO LỖI VỀ TELEGRAM (Nếu văng mạng)
+        notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Khả năng Token hết hạn. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
+
         clearInterval(pingInterval);
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(connectWebSocket, RECONNECT_DELAY);
@@ -150,59 +220,6 @@ function connectWebSocket() {
         ws.close();
     });
 }
-
-// ==========================================
-// ==========================================
-// 4. TELEGRAM BOT TỰ ĐỘNG BƠM TOKEN
-// ==========================================
-const TELE_BOT_TOKEN = '8516172972:AAFtVDGm5Eas6ratBM1OoJcGcMHpmKjgldg'; 
-const MY_CHAT_ID = 8631760602;
-
-const bot = new TelegramBot(TELE_BOT_TOKEN, {polling: true});
-
-bot.on('message', (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text;
-
-    // Chặn người lạ
-    if (chatId !== MY_CHAT_ID) {
-        bot.sendMessage(chatId, "⚠️ Ai đấy? Bạn không có quyền!");
-        return;
-    }
-
-    if (!text) return;
-
-    try {
-        const parsedData = JSON.parse(text);
-
-        if (parsedData && parsedData.data && parsedData.data.wsToken && parsedData.data.signature) {
-            
-            // Cập nhật biến cấu hình
-            SUNWIN_TOKEN = parsedData.data.wsToken;
-            SUNWIN_SIGNATURE = parsedData.data.signature;
-            SUNWIN_INFO = JSON.stringify(parsedData.data.info); 
-            WEBSOCKET_URL = `wss://websocket.azhkthg1.net/websocket?token=${SUNWIN_TOKEN}`;
-
-            // Gán lại gói tin mồi
-            initialMessages[0][4].info = SUNWIN_INFO;
-            initialMessages[0][4].signature = SUNWIN_SIGNATURE;
-
-            console.log(`[🔄 TELEGRAM] Admin đã bơm JSON Sunwin thành công! Đang reconnect...`);
-            
-            // Reconnect
-            connectWebSocket();
-
-            bot.sendMessage(chatId, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data!");
-        } else {
-            bot.sendMessage(chatId, "⚠️ Có vẻ là JSON nhưng không chứa token hợp lệ của Sunwin.");
-        }
-    } catch (error) {
-        if (text.includes('{') || text.includes('}')) {
-             bot.sendMessage(chatId, "❌ Lỗi: Copy JSON bị thiếu/thừa ngoặc rồi! Thử dán lại xem.");
-        }
-    }
-});
-console.log("[🤖] Telegram Bot Admin đã khởi động, sẵn sàng nhận JSON!");
 
 // ==========================================
 // 5. CÁC ROUTES API
