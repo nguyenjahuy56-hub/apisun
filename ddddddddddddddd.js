@@ -57,6 +57,7 @@ const patternHistory = []; // Mảng lưu trữ tối đa 500 phiên gần nhấ
 let ws = null;
 let pingInterval = null;
 let reconnectTimeout = null;
+let disconnectAlertTimeout = null; // Thêm biến cờ để quản lý vụ báo động token
 
 const getNetworkInfo = () => {
     const interfaces = os.networkInterfaces();
@@ -123,15 +124,18 @@ bot.on('message', (msg) => {
 
             console.log(`[🔄 TELEGRAM] Admin (${chatId}) đã bơm JSON Sunwin thành công! Đang reconnect...`);
             
+            // Lấy Tên/Username của người vừa ném token
+            const senderName = msg.from.username ? `@${msg.from.username}` : (msg.from.first_name || `ID: ${chatId}`);
+
             // Reconnect
             connectWebSocket();
 
-            // FIX Ở ĐÂY: Thông báo cho TẤT CẢ admin trong mảng ALLOWED_CHAT_IDS
+            // Thông báo cho các admin kèm tên người đã gửi
             ALLOWED_CHAT_IDS.forEach(id => {
                 if (id === chatId) {
                     bot.sendMessage(id, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data phà phà!");
                 } else {
-                    bot.sendMessage(id, `✅ Ê, sếp kia (ID: ${chatId}) vừa bơm Token mới rồi nhé, server đang chạy lại ngon nghẻ rồi!`);
+                    bot.sendMessage(id, `✅ Ê, sếp ${senderName} vừa bơm Token mới rồi nhé, server đang chạy lại ngon nghẻ rồi, anh em không cần gửi nữa nha!`);
                 }
             });
 
@@ -168,6 +172,7 @@ function connectWebSocket() {
     ws = new WebSocket(WEBSOCKET_URL, { headers: WS_HEADERS });
 
     ws.on('open', () => {
+        clearTimeout(disconnectAlertTimeout); // Hủy báo động nếu reconnect lại thành công!
         console.log('[✅] WebSocket connected to Sun.Win');
         initialMessages.forEach((msg, i) => {
             setTimeout(() => {
@@ -225,8 +230,12 @@ function connectWebSocket() {
     ws.on('close', (code, reason) => {
         console.log(`[🔌] WebSocket closed. Code: ${code}`);
         
-        // BÁO LỖI VỀ TELEGRAM (Nếu văng mạng)
-        notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Khả năng Token hết hạn. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
+        // CƠ CHẾ MỚI: Đợi 10 giây xem có tự reconnect lại không.
+        // Nếu ngâm quá 10s không vô được tức là token chết thật -> Lúc đó mới nhắn Telegram.
+        clearTimeout(disconnectAlertTimeout);
+        disconnectAlertTimeout = setTimeout(() => {
+            notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Đã thử reconnect 10s không được, khả năng Token hết hạn thật rồi. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
+        }, 10000);
 
         clearInterval(pingInterval);
         clearTimeout(reconnectTimeout);
