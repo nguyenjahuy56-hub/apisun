@@ -3,16 +3,16 @@ const express = require('express');
 const cors = require('cors');
 const os = require('os');
 const network = require('network');
-const TelegramBot = require('node-telegram-bot-api'); // THÊM THƯ VIỆN TELEGRAM
+const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // BẮT BUỘC ĐỂ NHẬN DATA TỪ PYTHON
+app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
 // ==========================================
-// 1. CẤU HÌNH SUNWIN (ĐÃ CHUYỂN SANG LET ĐỂ UPDATE)
+// 1. CẤU HÌNH SUNWIN
 // ==========================================
 let SUNWIN_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjIzOTk1MzIxNSwiYWZmSWQiOiJkZWZhdWx0IiwiYmFubmVkIjpmYWxzZSwiYnJhbmQiOiJzdW4ud2luIiwiZW1haWwiOiIiLCJ0aW1lc3RhbXAiOjE3NzkyOTA5MzY0OTIsImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0MzE1OmQxODA6YmNmOTpjNDo2Yjk4OmMyZmUiLCJtdXRlIjpmYWxzZSwiYXZhdGFyIjoiaHR0cHM6Ly9pbWFnZXMuc3dpbnNob3AubmV0L2ltYWdlcy9hdmF0YXIvYXZhdGFyXzEwLnBuZyIsInBsYXRmb3JtSWQiOjIsInVzZXJJZCI6IjAwMzc0MDY4LThiZmItNDk1Ni05YjEyLTI4OTNjMzEwNzE2MCIsImVtYWlsVmVyaWZpZWQiOm51bGwsInJlZ1RpbWUiOjE3NDU1OTI2NTU4MDcsInBob25lIjoiODQzMjk2ODk5NzEiLCJkZXBvc2l0Ijp0cnVlLCJ1c2VybmFtZSI6IlNDX3Nvbmd2ZWRlbTEwIn0.3DrTKiNZ5WQC-4ZLIZaFuazwlLm0A-LJnfak3rqbNcw";
 
@@ -52,17 +52,21 @@ let apiResponseData = {
 
 let currentAIPrediction = { result: "WAIT", confidence: 0, detail: "Đang cào data lịch sử..." };
 let currentSessionId = null;
-const patternHistory = []; // Mảng lưu trữ tối đa 500 phiên gần nhất
+const patternHistory = [];
 
 let ws = null;
 let pingInterval = null;
 let reconnectTimeout = null;
-let disconnectAlertTimeout = null; // Thêm biến cờ để quản lý vụ báo động token
+
+// ==========================================
+// FIX #1: FLAG CHẶN BÁO ĐỘNG GIẢ
+// Khi admin chủ động ném token → reconnect → WS cũ đóng → KHÔNG báo lỗi
+// ==========================================
+let suppressDisconnectAlert = false;
 
 const getNetworkInfo = () => {
     const interfaces = os.networkInterfaces();
     let localIP = '127.0.0.1';
-    let publicIP = null;
     for (const ifaceName in interfaces) {
         for (const iface of interfaces[ifaceName]) {
             if (!iface.internal && iface.family === 'IPv4') {
@@ -71,23 +75,22 @@ const getNetworkInfo = () => {
             }
         }
     }
-    return { localIP, publicIP };
+    return { localIP, publicIP: null };
 };
 
 
 // ==========================================
 // 3. TELEGRAM BOT & HỆ THỐNG BÁO ĐỘNG
 // ==========================================
-const TELE_BOT_TOKEN = '8516172972:AAFtVDGm5Eas6ratBM1OoJcGcMHpmKjgldg'; 
-const ALLOWED_CHAT_IDS = [8631760602, 8257979286]; // Thêm cả ID của ông và ông bạn
+const TELE_BOT_TOKEN = '8516172972:AAFtVDGm5Eas6ratBM1OoJcGcMHpmKjgldg';
+const ALLOWED_CHAT_IDS = [8631760602, 8257979286];
 
-const bot = new TelegramBot(TELE_BOT_TOKEN, {polling: true});
+const bot = new TelegramBot(TELE_BOT_TOKEN, { polling: true });
 
-// Tránh spam báo lỗi liên tục mỗi 2 giây
 let lastNotified = 0;
 function notifyAdmins(message) {
     const now = Date.now();
-    if (now - lastNotified > 60000) { // Đợi 1 phút mới báo lỗi 1 lần
+    if (now - lastNotified > 60000) {
         ALLOWED_CHAT_IDS.forEach(id => {
             bot.sendMessage(id, message).catch(err => console.log(`Không thể gửi tin nhắn cho ${id}:`, err.message));
         });
@@ -99,7 +102,6 @@ bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    // Chặn người lạ
     if (!ALLOWED_CHAT_IDS.includes(chatId)) {
         bot.sendMessage(chatId, "⚠️ Ai đấy? Bạn không có quyền truy cập hệ thống!");
         return;
@@ -111,31 +113,34 @@ bot.on('message', (msg) => {
         const parsedData = JSON.parse(text);
 
         if (parsedData && parsedData.data && parsedData.data.wsToken && parsedData.data.signature) {
-            
-            // Cập nhật biến cấu hình
+
             SUNWIN_TOKEN = parsedData.data.wsToken;
             SUNWIN_SIGNATURE = parsedData.data.signature;
-            SUNWIN_INFO = JSON.stringify(parsedData.data.info); 
+            SUNWIN_INFO = JSON.stringify(parsedData.data.info);
             WEBSOCKET_URL = `wss://websocket.azhkthg1.net/websocket?token=${SUNWIN_TOKEN}`;
 
-            // Gán lại gói tin mồi
             initialMessages[0][4].info = SUNWIN_INFO;
             initialMessages[0][4].signature = SUNWIN_SIGNATURE;
 
-            console.log(`[🔄 TELEGRAM] Admin (${chatId}) đã bơm JSON Sunwin thành công! Đang reconnect...`);
-            
-            // Lấy Tên/Username của người vừa ném token
-            const senderName = msg.from.username ? `@${msg.from.username}` : (msg.from.first_name || `ID: ${chatId}`);
+            // FIX #1: Bật flag trước khi reconnect để chặn báo động giả từ close event
+            suppressDisconnectAlert = true;
 
-            // Reconnect
+            console.log(`[🔄 TELEGRAM] Admin (${chatId}) đã bơm JSON Sunwin thành công! Đang reconnect...`);
+
             connectWebSocket();
 
-            // Thông báo cho các admin kèm tên người đã gửi
+            // FIX #2: Lấy tên/username của admin đã ném token để đồng bộ cho admin còn lại
+            const senderName = msg.chat.username
+                ? `@${msg.chat.username}`
+                : (msg.chat.first_name || `ID: ${chatId}`);
+
             ALLOWED_CHAT_IDS.forEach(id => {
                 if (id === chatId) {
+                    // Người ném token: xác nhận thành công
                     bot.sendMessage(id, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data phà phà!");
                 } else {
-                    bot.sendMessage(id, `✅ Ê, sếp ${senderName} vừa bơm Token mới rồi nhé, server đang chạy lại ngon nghẻ rồi, anh em không cần gửi nữa nha!`);
+                    // Admin còn lại: thông báo đã có người ném rồi, KHÔNG cần ném thêm
+                    bot.sendMessage(id, `✅ Ê sếp! ${senderName} vừa ném Token mới rồi, server đang chạy lại ngon nghẻ rồi!\n🚫 Bạn KHÔNG cần ném thêm nữa nhé!`);
                 }
             });
 
@@ -144,7 +149,7 @@ bot.on('message', (msg) => {
         }
     } catch (error) {
         if (text.includes('{') || text.includes('}')) {
-             bot.sendMessage(chatId, "❌ Lỗi: Copy JSON bị thiếu/thừa ngoặc rồi! Thử dán lại xem.");
+            bot.sendMessage(chatId, "❌ Lỗi: Copy JSON bị thiếu/thừa ngoặc rồi! Thử dán lại xem.");
         }
     }
 });
@@ -156,24 +161,26 @@ console.log("[🤖] Telegram Bot Admin đã khởi động, sẵn sàng nhận J
 // ==========================================
 function connectWebSocket() {
     if (ws) {
-        ws.removeAllListeners(); // Gỡ bỏ các sự kiện cũ
+        ws.removeAllListeners();
         try {
-            // FIX LỖI CRASH: Chỉ close bình thường nếu đang OPEN, còn lại terminate (kill luôn)
             if (ws.readyState === WebSocket.OPEN) {
                 ws.close();
             } else {
-                ws.terminate(); 
+                ws.terminate();
             }
         } catch (e) {
             console.log('[⚠️] Bỏ qua lỗi đóng WS cũ:', e.message);
         }
     }
-    
+
     ws = new WebSocket(WEBSOCKET_URL, { headers: WS_HEADERS });
 
     ws.on('open', () => {
-        clearTimeout(disconnectAlertTimeout); // Hủy báo động nếu reconnect lại thành công!
         console.log('[✅] WebSocket connected to Sun.Win');
+
+        // FIX #1: Reset flag khi kết nối thành công → các lần ngắt sau đó là thật, cho phép báo lỗi
+        suppressDisconnectAlert = false;
+
         initialMessages.forEach((msg, i) => {
             setTimeout(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -208,18 +215,16 @@ function connectWebSocket() {
                     "server_time": new Date().toISOString(),
                     "update_count": (apiResponseData.update_count || 0) + 1
                 };
-                
+
                 console.log(`[🎲] Phiên ${apiResponseData.Phien}: ${d1}-${d2}-${d3} = ${total} (${result})`);
-                
-                // Đẩy phiên mới lên đầu mảng
+
                 patternHistory.unshift({
                     "Phien": currentSessionId, "Xuc_xac_1": d1, "Xuc_xac_2": d2, "Xuc_xac_3": d3, "Tong": total, "Ket_qua": result,
                     "timestamp": new Date().toISOString()
                 });
-                
-                // Xóa phần tử cũ nhất nếu vượt 500 ván
+
                 if (patternHistory.length > 500) patternHistory.pop();
-                
+
                 currentSessionId = null;
             }
         } catch (e) {
@@ -229,13 +234,13 @@ function connectWebSocket() {
 
     ws.on('close', (code, reason) => {
         console.log(`[🔌] WebSocket closed. Code: ${code}`);
-        
-        // CƠ CHẾ MỚI: Đợi 10 giây xem có tự reconnect lại không.
-        // Nếu ngâm quá 10s không vô được tức là token chết thật -> Lúc đó mới nhắn Telegram.
-        clearTimeout(disconnectAlertTimeout);
-        disconnectAlertTimeout = setTimeout(() => {
-            notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Đã thử reconnect 10s không được, khả năng Token hết hạn thật rồi. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
-        }, 10000);
+
+        // FIX #1: Chỉ báo lỗi khi KHÔNG phải do admin chủ động ném token
+        if (!suppressDisconnectAlert) {
+            notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Khả năng Token hết hạn. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
+        } else {
+            console.log('[ℹ️] WS đóng do reconnect thủ công, bỏ qua báo động.');
+        }
 
         clearInterval(pingInterval);
         clearTimeout(reconnectTimeout);
@@ -244,7 +249,6 @@ function connectWebSocket() {
 
     ws.on('error', (err) => {
         console.error('[❌] WebSocket error:', err.message);
-        // ĐÃ XÓA ws.close() TRÁNH CRASH SERVER
     });
 }
 
@@ -259,7 +263,7 @@ app.post('/api/update-prediction', (req, res) => {
 app.get('/api/ddvipro', (req, res) => {
     res.json({
         ...apiResponseData,
-        history: patternHistory, 
+        history: patternHistory,
         ai_prediction: currentAIPrediction
     });
 });
@@ -267,7 +271,7 @@ app.get('/api/ddvipro', (req, res) => {
 app.get('/api/history', (req, res) => {
     res.json({
         current: apiResponseData,
-        history: patternHistory, 
+        history: patternHistory,
         total_requests: apiResponseData.update_count || 0
     });
 });
