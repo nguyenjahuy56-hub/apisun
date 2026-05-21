@@ -152,9 +152,19 @@ console.log("[🤖] Telegram Bot Admin đã khởi động, sẵn sàng nhận J
 // ==========================================
 function connectWebSocket() {
     if (ws) {
-        ws.removeAllListeners();
-        ws.close();
+        ws.removeAllListeners(); // Gỡ bỏ các sự kiện cũ
+        try {
+            // FIX LỖI CRASH: Chỉ close bình thường nếu đang OPEN, còn lại terminate (kill luôn)
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            } else {
+                ws.terminate(); 
+            }
+        } catch (e) {
+            console.log('[⚠️] Bỏ qua lỗi đóng WS cũ:', e.message);
+        }
     }
+    
     ws = new WebSocket(WEBSOCKET_URL, { headers: WS_HEADERS });
 
     ws.on('open', () => {
@@ -225,7 +235,7 @@ function connectWebSocket() {
 
     ws.on('error', (err) => {
         console.error('[❌] WebSocket error:', err.message);
-        ws.close();
+        // ĐÃ XÓA ws.close() TRÁNH CRASH SERVER
     });
 }
 
