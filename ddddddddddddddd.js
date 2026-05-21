@@ -3,16 +3,16 @@ const express = require('express');
 const cors = require('cors');
 const os = require('os');
 const network = require('network');
-const TelegramBot = require('node-telegram-bot-api'); // THÊM THƯ VIỆN TELEGRAM
+const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // BẮT BUỘC ĐỂ NHẬN DATA TỪ PYTHON
+app.use(express.json()); 
 
 const PORT = process.env.PORT || 3001;
 
 // ==========================================
-// 1. CẤU HÌNH SUNWIN (ĐÃ CHUYỂN SANG LET ĐỂ UPDATE)
+// 1. CẤU HÌNH SUNWIN
 // ==========================================
 let SUNWIN_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJnZW5kZXIiOjAsImNhblZpZXdTdGF0IjpmYWxzZSwiZGlzcGxheU5hbWUiOiJzb25ndmVkZW0yMCIsImJvdCI6MCwiaXNNZXJjaGFudCI6ZmFsc2UsInZlcmlmaWVkQmFua0FjY291bnQiOmZhbHNlLCJwbGF5RXZlbnRMb2JieSI6ZmFsc2UsImN1c3RvbWVySWQiOjIzOTk1MzIxNSwiYWZmSWQiOiJkZWZhdWx0IiwiYmFubmVkIjpmYWxzZSwiYnJhbmQiOiJzdW4ud2luIiwiZW1haWwiOiIiLCJ0aW1lc3RhbXAiOjE3NzkyOTA5MzY0OTIsImxvY2tHYW1lcyI6W10sImFtb3VudCI6MCwibG9ja0NoYXQiOmZhbHNlLCJwaG9uZVZlcmlmaWVkIjp0cnVlLCJpcEFkZHJlc3MiOiIyMDAxOmVlMDo0MzE1OmQxODA6YmNmOTpjNDo2Yjk4OmMyZmUiLCJtdXRlIjpmYWxzZSwiYXZhdGFyIjoiaHR0cHM6Ly9pbWFnZXMuc3dpbnNob3AubmV0L2ltYWdlcy9hdmF0YXIvYXZhdGFyXzEwLnBuZyIsInBsYXRmb3JtSWQiOjIsInVzZXJJZCI6IjAwMzc0MDY4LThiZmItNDk1Ni05YjEyLTI4OTNjMzEwNzE2MCIsImVtYWlsVmVyaWZpZWQiOm51bGwsInJlZ1RpbWUiOjE3NDU1OTI2NTU4MDcsInBob25lIjoiODQzMjk2ODk5NzEiLCJkZXBvc2l0Ijp0cnVlLCJ1c2VybmFtZSI6IlNDX3Nvbmd2ZWRlbTEwIn0.3DrTKiNZ5WQC-4ZLIZaFuazwlLm0A-LJnfak3rqbNcw";
 
@@ -37,7 +37,7 @@ let initialMessages = [
 ];
 
 const WS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Origin": "https://play.sun.win"
 };
 const RECONNECT_DELAY = 2500;
@@ -52,53 +52,40 @@ let apiResponseData = {
 
 let currentAIPrediction = { result: "WAIT", confidence: 0, detail: "Đang cào data lịch sử..." };
 let currentSessionId = null;
-const patternHistory = []; // Mảng lưu trữ tối đa 500 phiên gần nhất
+const patternHistory = []; 
 
 let ws = null;
 let pingInterval = null;
 let reconnectTimeout = null;
 
+// CỜ HIỆU ĐỂ CHỈ BÁO ĐỘNG 1 LẦN DUY NHẤT
+let isTokenDead = false; 
+
 const getNetworkInfo = () => {
     const interfaces = os.networkInterfaces();
     let localIP = '127.0.0.1';
-    let publicIP = null;
     for (const ifaceName in interfaces) {
         for (const iface of interfaces[ifaceName]) {
             if (!iface.internal && iface.family === 'IPv4') {
-                localIP = iface.address;
-                break;
+                localIP = iface.address; break;
             }
         }
     }
-    return { localIP, publicIP };
+    return { localIP };
 };
 
-
 // ==========================================
-// 3. TELEGRAM BOT & HỆ THỐNG BÁO ĐỘNG
+// 3. TELEGRAM BOT
 // ==========================================
 const TELE_BOT_TOKEN = '8516172972:AAFtVDGm5Eas6ratBM1OoJcGcMHpmKjgldg'; 
-const ALLOWED_CHAT_IDS = [8631760602, 8257979286]; // Thêm cả ID của ông và ông bạn
+const ALLOWED_CHAT_IDS = [8631760602, 8257979286]; 
 
 const bot = new TelegramBot(TELE_BOT_TOKEN, {polling: true});
-
-// Tránh spam báo lỗi liên tục mỗi 2 giây
-let lastNotified = 0;
-function notifyAdmins(message) {
-    const now = Date.now();
-    if (now - lastNotified > 60000) { // Đợi 1 phút mới báo lỗi 1 lần
-        ALLOWED_CHAT_IDS.forEach(id => {
-            bot.sendMessage(id, message).catch(err => console.log(`Không thể gửi tin nhắn cho ${id}:`, err.message));
-        });
-        lastNotified = now;
-    }
-}
 
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    // Chặn người lạ (Kiểm tra xem ID có nằm trong mảng không)
     if (!ALLOWED_CHAT_IDS.includes(chatId)) {
         bot.sendMessage(chatId, "⚠️ Ai đấy? Bạn không có quyền truy cập hệ thống!");
         return;
@@ -111,33 +98,31 @@ bot.on('message', (msg) => {
 
         if (parsedData && parsedData.data && parsedData.data.wsToken && parsedData.data.signature) {
             
-            // Cập nhật biến cấu hình
             SUNWIN_TOKEN = parsedData.data.wsToken;
             SUNWIN_SIGNATURE = parsedData.data.signature;
             SUNWIN_INFO = JSON.stringify(parsedData.data.info); 
             WEBSOCKET_URL = `wss://websocket.azhkthg1.net/websocket?token=${SUNWIN_TOKEN}`;
 
-            // Gán lại gói tin mồi
             initialMessages[0][4].info = SUNWIN_INFO;
             initialMessages[0][4].signature = SUNWIN_SIGNATURE;
 
-            console.log(`[🔄 TELEGRAM] Admin (${chatId}) đã bơm JSON Sunwin thành công! Đang reconnect...`);
+            console.log(`[🔄 TELEGRAM] Admin (${chatId}) đã bơm JSON! Đang reconnect...`);
             
-            // Reconnect
+            // Xóa luồng cắm lại ngầm cũ để tránh đụng độ rác
+            clearTimeout(reconnectTimeout); 
             connectWebSocket();
 
-            bot.sendMessage(chatId, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data phà phà!");
+            bot.sendMessage(chatId, "✅ HÚP! Đã bóc Token mới thành công. Tool đang hít data phà phà!");
         } else {
             bot.sendMessage(chatId, "⚠️ Có vẻ là JSON nhưng không chứa token hợp lệ của Sunwin.");
         }
     } catch (error) {
         if (text.includes('{') || text.includes('}')) {
-             bot.sendMessage(chatId, "❌ Lỗi: Copy JSON bị thiếu/thừa ngoặc rồi! Thử dán lại xem.");
+             bot.sendMessage(chatId, "❌ Lỗi: Copy JSON bị rách thiếu ngoặc rồi! Thử copy lại nguyên cục xem.");
         }
     }
 });
 console.log("[🤖] Telegram Bot Admin đã khởi động, sẵn sàng nhận JSON!");
-
 
 // ==========================================
 // 4. LOGIC WEBSOCKET SUNWIN
@@ -151,6 +136,8 @@ function connectWebSocket() {
 
     ws.on('open', () => {
         console.log('[✅] WebSocket connected to Sun.Win');
+        isTokenDead = false; // Reset cờ báo động khi kết nối sống lại
+
         initialMessages.forEach((msg, i) => {
             setTimeout(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -188,27 +175,27 @@ function connectWebSocket() {
                 
                 console.log(`[🎲] Phiên ${apiResponseData.Phien}: ${d1}-${d2}-${d3} = ${total} (${result})`);
                 
-                // Đẩy phiên mới lên đầu mảng
                 patternHistory.unshift({
                     "Phien": currentSessionId, "Xuc_xac_1": d1, "Xuc_xac_2": d2, "Xuc_xac_3": d3, "Tong": total, "Ket_qua": result,
                     "timestamp": new Date().toISOString()
                 });
                 
-                // Xóa phần tử cũ nhất nếu vượt 500 ván
                 if (patternHistory.length > 500) patternHistory.pop();
-                
                 currentSessionId = null;
             }
-        } catch (e) {
-            console.error('[❌] Lỗi xử lý message:', e.message);
-        }
+        } catch (e) {}
     });
 
     ws.on('close', (code, reason) => {
         console.log(`[🔌] WebSocket closed. Code: ${code}`);
         
-        // BÁO LỖI VỀ TELEGRAM (Nếu văng mạng)
-        notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Khả năng Token hết hạn. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
+        // CHỈ BÁO ĐỘNG ĐÚNG 1 LẦN NẾU TOKEN CHẾT
+        if (!isTokenDead) {
+            ALLOWED_CHAT_IDS.forEach(id => {
+                bot.sendMessage(id, "⚠️ [BÁO ĐỘNG] Rớt mạng Sunwin! Token đã tèo hoặc có người đang giành đăng nhập. Quăng lẹ cục JSON mới vào đây để chạy tiếp!").catch(()=>{});
+            });
+            isTokenDead = true; // Bật cờ khóa mõm bot, không cho spam nữa
+        }
 
         clearInterval(pingInterval);
         clearTimeout(reconnectTimeout);
@@ -331,11 +318,8 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    const networkInfo = getNetworkInfo();
     console.log(`\n=========================================`);
-    console.log(`🚀 API SUNWIN DD (TELEGRAM BOT EDITION) - RUNNING`);
-    console.log(`=========================================`);
-    console.log(`   API MỚI: http://localhost:${PORT}/api/ddvipro`);
+    console.log(`🚀 API SUNWIN DD (TELEGRAM V3) - RUNNING`);
     console.log(`=========================================\n`);
     connectWebSocket();
 });
