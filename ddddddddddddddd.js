@@ -47,7 +47,7 @@ const PING_INTERVAL = 15000;
 // 2. STATE & BIẾN CỤC BỘ
 // ==========================================
 let apiResponseData = {
-    "Phien": null, "Xuc_xac_1": null, "Xuc_xac_2": null, "Xuc_xac_3": null, "Tong": null, "Ket_qua": "", "id": "dd", "server_time": new Date().toISOString()
+    "Phien": null, "Xuc_xac_1": null, "Xuc_xac_2": null, "Xuc_xac_3": null, "Tong": null, "Ket_qua": "", "id": "dark", "server_time": new Date().toISOString()
 };
 
 let currentAIPrediction = { result: "WAIT", confidence: 0, detail: "Đang cào data lịch sử..." };
@@ -98,7 +98,7 @@ bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    // Chặn người lạ (Kiểm tra xem ID có nằm trong mảng không)
+    // Chặn người lạ
     if (!ALLOWED_CHAT_IDS.includes(chatId)) {
         bot.sendMessage(chatId, "⚠️ Ai đấy? Bạn không có quyền truy cập hệ thống!");
         return;
@@ -126,7 +126,15 @@ bot.on('message', (msg) => {
             // Reconnect
             connectWebSocket();
 
-            bot.sendMessage(chatId, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data phà phà!");
+            // FIX Ở ĐÂY: Thông báo cho TẤT CẢ admin trong mảng ALLOWED_CHAT_IDS
+            ALLOWED_CHAT_IDS.forEach(id => {
+                if (id === chatId) {
+                    bot.sendMessage(id, "✅ HÚP! Đã bóc Token & Signature thành công, AI đang hít data phà phà!");
+                } else {
+                    bot.sendMessage(id, `✅ Ê, sếp kia (ID: ${chatId}) vừa bơm Token mới rồi nhé, server đang chạy lại ngon nghẻ rồi!`);
+                }
+            });
+
         } else {
             bot.sendMessage(chatId, "⚠️ Có vẻ là JSON nhưng không chứa token hợp lệ của Sunwin.");
         }
