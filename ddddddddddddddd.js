@@ -152,9 +152,10 @@ function connectWebSocket() {
 }
 
 // ==========================================
+// ==========================================
 // 4. TELEGRAM BOT TỰ ĐỘNG BƠM TOKEN
 // ==========================================
-const TELE_BOT_TOKEN = '8568055781:AAFYJhI5vcC2Q4Q8UaVVNlkOaBByEg6MFhw'; 
+const TELE_BOT_TOKEN = '8516172972:AAFtVDGm5Eas6ratBM1OoJcGcMHpmKjgldg'; 
 const MY_CHAT_ID = 8631760602;
 
 const bot = new TelegramBot(TELE_BOT_TOKEN, {polling: true});
