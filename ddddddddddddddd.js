@@ -64,6 +64,16 @@ let reconnectTimeout = null;
 // ==========================================
 let suppressDisconnectAlert = false;
 
+// ==========================================
+// FIX #3: ĐẾM NGẮT LIÊN TIẾP TRONG 5 GIÂY
+// Bị đá 1 lần rồi tự vào lại được = bình thường, im lặng
+// Ngắt liên tiếp ≥ 2 lần trong vòng 5s = token thật sự hỏng → mới báo ad
+// ==========================================
+let disconnectCount = 0;
+let firstDisconnectTime = null;
+const DISCONNECT_WINDOW_MS = 5000; // Cửa sổ 5 giây
+const DISCONNECT_THRESHOLD = 2;    // Bao nhiêu lần ngắt trong window thì báo
+
 const getNetworkInfo = () => {
     const interfaces = os.networkInterfaces();
     let localIP = '127.0.0.1';
