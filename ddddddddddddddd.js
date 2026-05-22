@@ -65,14 +65,12 @@ let reconnectTimeout = null;
 let suppressDisconnectAlert = false;
 
 // ==========================================
-// FIX #3: ĐẾM NGẮT LIÊN TIẾP TRONG 5 GIÂY
-// Bị đá 1 lần rồi tự vào lại được = bình thường, im lặng
-// Ngắt liên tiếp ≥ 2 lần trong vòng 5s = token thật sự hỏng → mới báo ad
+// FIX #3: ĐẾM SỐ LẦN BỊ ĐÁ (CHỐNG SPAM)
+// Bị đá 1-2 lần rồi tự vào lại được = bình thường, im lặng
+// Ngắt liên tiếp 3 lần = token thật sự hỏng → mới báo ad
 // ==========================================
 let disconnectCount = 0;
-let firstDisconnectTime = null;
-const DISCONNECT_WINDOW_MS = 5000; // Cửa sổ 5 giây
-const DISCONNECT_THRESHOLD = 2;    // Bao nhiêu lần ngắt trong window thì báo
+const DISCONNECT_THRESHOLD = 3;
 
 const getNetworkInfo = () => {
     const interfaces = os.networkInterfaces();
@@ -190,6 +188,9 @@ function connectWebSocket() {
 
         // FIX #1: Reset flag khi kết nối thành công → các lần ngắt sau đó là thật, cho phép báo lỗi
         suppressDisconnectAlert = false;
+        
+        // FIX #3: Kết nối lại thành công thì reset bộ đếm lỗi về 0
+        disconnectCount = 0; 
 
         initialMessages.forEach((msg, i) => {
             setTimeout(() => {
@@ -245,9 +246,17 @@ function connectWebSocket() {
     ws.on('close', (code, reason) => {
         console.log(`[🔌] WebSocket closed. Code: ${code}`);
 
-        // FIX #1: Chỉ báo lỗi khi KHÔNG phải do admin chủ động ném token
         if (!suppressDisconnectAlert) {
-            notifyAdmins("⚠️ [BÁO ĐỘNG] Mất kết nối tới máy chủ Sunwin! Khả năng Token hết hạn. Sếp nào đang rảnh thì vào F12 vứt JSON mới lên đây lẹ!");
+            disconnectCount++;
+            console.log(`[⚠️] Bị đá lần ${disconnectCount}/${DISCONNECT_THRESHOLD}... Đang thử reconnect.`);
+
+            // Chỉ báo động nếu số lần ngắt liên tục chạm ngưỡng
+            if (disconnectCount >= DISCONNECT_THRESHOLD) {
+                notifyAdmins(`⚠️ [BÁO ĐỘNG] Máy chủ Sunwin đá liên tục ${DISCONNECT_THRESHOLD} lần không vào lại được! Khả năng Token hết hạn thật rồi. Vứt JSON mới lên đây lẹ!`);
+                
+                // Reset lại để tránh bot spam 100 tin nhắn nếu admin chưa kịp thay token
+                disconnectCount = 0; 
+            }
         } else {
             console.log('[ℹ️] WS đóng do reconnect thủ công, bỏ qua báo động.');
         }
